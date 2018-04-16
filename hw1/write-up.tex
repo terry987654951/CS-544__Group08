@@ -1,0 +1,150 @@
+
+\documentclass[journal,onecolumn]{IEEEtran}
+\usepackage[super]{nth}
+\newcommand\tab[1][0.5cm]{\hspace*{#1}}
+
+\ifCLASSINFOpdf
+ 
+\else
+ 
+\fi
+\hyphenation{op-tical net-works semi-conduc-tor}
+
+
+\begin{document}
+
+\title{Project 1:Getting Acquainted}
+
+\author{Sangyeon Lee,
+        Mingyang Li,
+        and Yuan-hao Cheng\\
+        CS 544,
+        Spring 2018\\
+        April 15, 2018}% <-this % stops a space
+
+\maketitle
+
+% As a general rule, do not put math, special symbols or citations
+% in the abstract or keywords.
+\begin{abstract}
+~~~~This report concerns how to build one’s own kernel and run it on QEMU on a linux server. It consists of 3 sections. The first is about the commands having been performed for the task in chronological order. The next part is on the anatomy of a qemu command, and the last one is on the log of this task.
+\end{abstract}
+
+
+
+\newpage
+
+
+\IEEEpeerreviewmaketitle
+
+
+
+\section{Log of Commands performed for the Requested Actions}
+
+\begin{itemize}
+\item cd /						
+								\\(Move to the root)
+\item cd scratch/spring2018/	
+								\\(Move to the assigned directory for a group project)
+\item mkdir Group08				
+								\\(Make a group directory)
+\item cd Group08				
+								\\(Get in the group folder)
+\item cp /scratch/bin/acl\_open /scratch/spring2018/Group08/	
+								\\(Copy acl\_open file to the group folder) 
+\item acl\_open . "[userID"]		
+								\\(Give permission to access the group folder only to the members of the group)
+\item git clone git://git.yoctoproject.org/linux-yocto-3.19 
+								\\(Import Linux source files from the given Git Repository)
+\item cd linux-yocto-3.19/		
+								\\(Move to a directory that contains a local copy of Linux source files)
+\item git checkout tags/v3.19.2	
+								\\(Switch to the “v3.19.2” tag)
+\item make tags					
+								\\(Make tags for the ease of editing codes in the future)
+\item cd ..						
+								\\(Move to the parent folder, which is the group folder)
+\item cp /scratch/files/bzImage-qemux86.bin ./
+								\\(Copy a pre-made kernel file to the group folder in order to test on VM machine)
+\item cp /scratch/files/core-image-lsb-sdk-qemux86.ext4 ./
+								\\(Copy all the necessary files, including the subsequent 3 commands, to the group folder)
+\item cp /scratch/opt/environment-setup-i586-poky-linux ./
+\item cp /scratch/files/config-3.19.2-yocto-standard ./
+\item cp config-3.19.2-yocto-standard ./linux-yocto-3.19/.config
+\item vi ./linux-yocto-3.19/.config cd linux-yocto-3.19		
+								\\(Change the value of CONFIG\_LOCALVERSION="-group08" through vi editor)
+\item source environment-setup-i586-poky-linux
+								\\(source the necessary environment variables)
+\item cd linux-yocto-3.19
+								\\(Move to a directory that contains a local copy of Linux source files)
+\item make -j4		
+								\\(Build a kernel for the group project)
+\item cd ..
+								\\(Move to the parent folder, which is the group folder)
+\item qemu-system-i386 -gdb tcp::5508 -S -nographic -kernel ./linux-yocto-3.19/arch/x86/boot/bzImage -drive file=core-image-lsb-sdk-qemux86.ext4,if=virtio -enable-kvm -net none -usb -localtime --no-reboot --append "root=/dev/vda rw console=ttyS0 debug"
+								\\(Run QEMU emulator)
+\newline
+\newline
+\textbf{In another command console}
+\newline
+\item cd /scratch/spring2018/Group08/linux-yocto-3.19/
+								\\(Move to a directory that contains a local copy of Linux source files)
+\item gdb vmlinux
+								\\(Run gdb debugger with a built Linux image file)
+\item (gdb) target remote :5508
+								\\(Enter the port number, which has been given when running QEMU the above, for remote debugging)
+\item (gdb) continue
+								\\(Boot the built Linux kernel)
+\end{itemize}
+
+
+
+\newpage
+\section{Explanation of every flag in the listed qemu command-line}
+\begin{itemize}
+\item qemu-system-i386
+\\: This is an execution file of QEMU for i386 architecture
+\item -gdb tcp::5508
+\\: This parameter allows to wait for gdb connection on device through  TCP protocol with a port number 5508
+\item -S
+\\: This parameter allows not to start cpu at start up.
+\item -nographic
+\\: This parameter means to exclude graphical output, so that a user is provided only with a simple command-line-based Linux.
+\item -kernel ./linux-yocto-3.19/arch/x86/boot/bzImage
+\\: This parameter allows to utilize a kernel image built for the group project
+\item -drive file=core-image-lsb-sdk-qemux86.ext4,if=virtio
+\\: This parameter allows to define a new drive to be utilized. Especially, the type of the interface, on which the defined drive is connected, is limited to "virtio"
+\item -enable-kvm
+\\: This parameter enables KVM full virtualization support
+\item -net none
+\\: This parameter signifies that no network device should be configured.
+\item -usb
+\\: This parameter enables the usb driver.
+\item -localtime
+\\: This parameter allows RTC to start at the current local time.
+\item --no-reboot
+\\:This parameter allows a machine to exit instead of rebooting
+\item -append "root=/dev/vda rw console=ttyS0 debug"
+\\:This parameter allows to give the kernel command line arguments.
+\end{itemize}
+
+\section{Work Log}
+\begin{itemize}
+\item \textbf{April \nth{9}, 2018:}
+		\\: Start to research on building and running a kernel on a server
+\item  \textbf{April \nth{10}, 2018:} 
+       \\: Finish building and running a kernel on OS2 server
+\item  \textbf{April \nth{11}, 2018:} 
+       \\: Allocate the work for LaTex document.
+\item \textbf{April \nth{13}, 2018:}
+      \\: Combine everyone's LaTex work.
+\end{itemize}
+
+                
+
+                
+
+
+
+
+\end{document}
