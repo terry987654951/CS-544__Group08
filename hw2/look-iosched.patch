@@ -1,0 +1,385 @@
+diff -uNr Backup/Kconfig.iosched Working/Kconfig.iosched
+--- Backup/Kconfig.iosched	2018-05-05 14:57:57.754332220 -0700
++++ Working/Kconfig.iosched	2018-05-06 00:26:09.328409818 -0700
+@@ -39,6 +39,10 @@
+ 	---help---
+ 	  Enable group IO scheduling in CFQ.
+ 
++config IOSCHED_LOOK
++	tristate "Look scheduler"
++	default y
++
+ choice
+ 	prompt "Default I/O scheduler"
+ 	default DEFAULT_CFQ
+@@ -55,6 +59,9 @@
+ 	config DEFAULT_NOOP
+ 		bool "No-op"
+ 
++	config DEFAULT_LOOK
++		bool "look" if IOSCHED_LOOK
++
+ endchoice
+ 
+ config DEFAULT_IOSCHED
+@@ -62,6 +69,7 @@
+ 	default "deadline" if DEFAULT_DEADLINE
+ 	default "cfq" if DEFAULT_CFQ
+ 	default "noop" if DEFAULT_NOOP
++	default "look" if DEFAULT_LOOK
+ 
+ endmenu
+ 
+diff -uNr Backup/look-iosched.c Working/look-iosched.c
+--- Backup/look-iosched.c	1969-12-31 16:00:00.000000000 -0800
++++ Working/look-iosched.c	2018-05-06 20:42:28.930491652 -0700
+@@ -0,0 +1,209 @@
++
++#include <linux/blkdev.h>
++#include <linux/elevator.h>
++#include <linux/bio.h>
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/init.h>
++
++#define FORWARD 1
++#define BACKWARD 0
++
++struct look_data {
++	struct list_head queue;
++	sector_t pos_cur;
++	int direction_cur;
++};
++
++static void look_merged_requests(struct request_queue *q, struct request *rq,
++				 struct request *next)
++{
++	list_del_init(&next->queuelist);
++}
++
++static int look_dispatch(struct request_queue *q, int force)
++{
++	struct look_data *ld = q->elevator->elevator_data;
++	struct list_head *tmp_head;
++	sector_t pos_rst;
++	sector_t pos_tmp;
++	sector_t pos_2ndTmp;
++	struct request *rqst_rst;
++	struct request *rqst_tmp;
++
++	// This branch is taken when a given queus has, at least, one reqeust in a given queue.
++	if (!list_empty(&ld->queue)) { 
++
++		// Take the next request out of a given queue.
++		rqst_rst = list_entry(ld->queue.next, struct request, queuelist);
++		// Calculate the position of the request.
++		pos_rst = blk_rq_pos(rqst_rst);
++		pos_2ndTmp = pos_rst;
++
++		// Check if there is another reqeust in a given queue in the current direction that is closer to the current position than the next reqeust
++		// that is assigned in "rqst_rst".
++		list_for_each(tmp_head, &ld->queue) {
++			rqst_tmp = list_entry(tmp_head, struct request, queuelist);
++
++			pos_tmp = blk_rq_pos(rqst_tmp); // Get rqst_tmp cureent sector
++										  //printk(KERN_INFO "The itterated sector is: %llu \n", pos_tmp);
++			// This is the case where the current direction is Forward where a reqeust, which is the closest to the current location
++			// in an ascending order, is taken.
++			if (ld->pos_cur == FORWARD)
++			{
++				printk(KERN_INFO "[look_Dispatch] NotEmpty | Forward\n");
++
++				if ((pos_tmp < pos_rst) && (pos_tmp >= ld->pos_cur))
++				{
++					rqst_rst = rqst_tmp;
++					pos_2ndTmp = pos_rst;
++					pos_rst = pos_tmp;
++				}
++			}
++			// This is the case where the current direction is Backward where a reqeust, which is the closest to the current location
++			// in a descending order, is taken.
++			else
++			{
++				printk(KERN_INFO "[look_Dispatch] NotEmpty | Backward\n");
++
++				if ((pos_tmp > pos_rst) && (pos_tmp <= ld->pos_cur))
++				{
++					rqst_rst = rqst_tmp;
++					pos_2ndTmp = pos_rst;
++					pos_rst = pos_tmp;
++				}
++			}
++
++		}
++
++		// Check if the 2nd closest request in a given queue is the same as the resultant reqest from the traversal of the queue.
++		// If so, flip the current direction since it means that there is no further request to be taken in the direction.
++		if (pos_rst == pos_2ndTmp)
++		{
++			if (ld->direction_cur == FORWARD)
++			{
++				printk(KERN_INFO "[look_Dispatch] No reqeust for traversal in FORWARD changing to BACKWARD\n");
++				ld->direction_cur = BACKWARD;
++			}
++			else
++			{
++				printk(KERN_INFO "[look_Dispatch] No reqeust for traversal in BACKWARD changing to FORWARD\n");
++				ld->direction_cur = FORWARD;
++			}
++		}
++
++		list_del_init(&rqst_rst->queuelist);
++		elv_dispatch_sort(q, rqst_rst);
++		return 1;
++	}
++	// This is the case where no request exists in a given queue.
++	else
++	{
++
++		switch (ld->direction_cur)
++		{
++		case FORWARD:
++			printk(KERN_INFO "[look_Dispatch] Empty | Forward\n");
++			ld->direction_cur = BACKWARD;
++			break;
++		case BACKWARD:
++			printk(KERN_INFO "[look_Dispatch] Empty | Backward\n");
++			ld->direction_cur = FORWARD;
++			break;
++		}
++
++		return 0;
++	}
++}
++
++static void look_add_request(struct request_queue *q, struct request *rq)
++{
++	struct look_data *ld = q->elevator->elevator_data;
++
++	printk(KERN_INFO "[look] New Request is being added!\n");
++
++	list_add_tail(&rq->queuelist, &ld->queue);
++}
++
++static struct request *
++look_former_request(struct request_queue *q, struct request *rq)
++{
++	struct look_data *ld = q->elevator->elevator_data;
++
++	if (rq->queuelist.prev == &ld->queue)
++		return NULL;
++	return list_entry(rq->queuelist.prev, struct request, queuelist);
++}
++
++static struct request *
++look_latter_request(struct request_queue *q, struct request *rq)
++{
++	struct look_data *ld = q->elevator->elevator_data;
++
++	if (rq->queuelist.next == &ld->queue)
++		return NULL;
++	return list_entry(rq->queuelist.next, struct request, queuelist);
++}
++
++static int look_init_queue(struct request_queue *q, struct elevator_type *e)
++{
++	struct look_data *ld;
++	struct elevator_queue *eq;
++
++	printk(KERN_INFO "[look] Queue is being initilized!\n");
++
++	eq = elevator_alloc(q, e);
++	if (!eq)
++		return -ENOMEM;
++
++	ld = kmalloc_node(sizeof(*ld), GFP_KERNEL, q->node);
++	if (!ld) {
++		kobject_put(&eq->kobj);
++		return -ENOMEM;
++	}
++	eq->elevator_data = ld;
++
++	INIT_LIST_HEAD(&ld->queue);
++
++	ld->direction_cur = FORWARD;
++
++	spin_lock_irq(q->queue_lock);
++	q->elevator = eq;
++	spin_unlock_irq(q->queue_lock);
++	return 0;
++}
++
++static void look_exit_queue(struct elevator_queue *e)
++{
++	struct look_data *ld = e->elevator_data;
++
++	BUG_ON(!list_empty(&ld->queue));
++	kfree(ld);
++}
++
++static struct elevator_type elevator_look = {
++	.ops = {
++		.elevator_merge_req_fn		= look_merged_requests,
++		.elevator_dispatch_fn		= look_dispatch,
++		.elevator_add_req_fn		= look_add_request,
++		.elevator_former_req_fn		= look_former_request,
++		.elevator_latter_req_fn		= look_latter_request,
++		.elevator_init_fn		= look_init_queue,
++		.elevator_exit_fn		= look_exit_queue,
++	},
++	.elevator_name = "look",
++	.elevator_owner = THIS_MODULE,
++};
++
++static int __init look_init(void)
++{
++	return elv_register(&elevator_look);
++}
++
++static void __exit look_exit(void)
++{
++	elv_unregister(&elevator_look);
++}
++
++module_init(look_init);
++module_exit(look_exit);
+\ No newline at end of file
+diff -uNr Backup/Makefile Working/Makefile
+--- Backup/Makefile	2018-05-05 14:57:57.754332220 -0700
++++ Working/Makefile	2018-05-05 23:08:50.689965314 -0700
+@@ -16,6 +16,7 @@
+ obj-$(CONFIG_BLK_CGROUP)	+= blk-cgroup.o
+ obj-$(CONFIG_BLK_DEV_THROTTLING)	+= blk-throttle.o
+ obj-$(CONFIG_IOSCHED_NOOP)	+= noop-iosched.o
++obj-$(CONFIG_IOSCHED_LOOK)	+= look-iosched.o
+ obj-$(CONFIG_IOSCHED_DEADLINE)	+= deadline-iosched.o
+ obj-$(CONFIG_IOSCHED_CFQ)	+= cfq-iosched.o
+ 
+diff -uNr Backup/noop-iosched.c Working/noop-iosched.c
+--- Backup/noop-iosched.c	2018-05-05 14:57:57.762332352 -0700
++++ Working/noop-iosched.c	1969-12-31 16:00:00.000000000 -0800
+@@ -1,124 +0,0 @@
+-/*
+- * elevator noop
+- */
+-#include <linux/blkdev.h>
+-#include <linux/elevator.h>
+-#include <linux/bio.h>
+-#include <linux/module.h>
+-#include <linux/slab.h>
+-#include <linux/init.h>
+-
+-struct noop_data {
+-	struct list_head queue;
+-};
+-
+-static void noop_merged_requests(struct request_queue *q, struct request *rq,
+-				 struct request *next)
+-{
+-	list_del_init(&next->queuelist);
+-}
+-
+-static int noop_dispatch(struct request_queue *q, int force)
+-{
+-	struct noop_data *nd = q->elevator->elevator_data;
+-
+-	if (!list_empty(&nd->queue)) {
+-		struct request *rq;
+-		rq = list_entry(nd->queue.next, struct request, queuelist);
+-		list_del_init(&rq->queuelist);
+-		elv_dispatch_sort(q, rq);
+-		return 1;
+-	}
+-	return 0;
+-}
+-
+-static void noop_add_request(struct request_queue *q, struct request *rq)
+-{
+-	struct noop_data *nd = q->elevator->elevator_data;
+-
+-	list_add_tail(&rq->queuelist, &nd->queue);
+-}
+-
+-static struct request *
+-noop_former_request(struct request_queue *q, struct request *rq)
+-{
+-	struct noop_data *nd = q->elevator->elevator_data;
+-
+-	if (rq->queuelist.prev == &nd->queue)
+-		return NULL;
+-	return list_entry(rq->queuelist.prev, struct request, queuelist);
+-}
+-
+-static struct request *
+-noop_latter_request(struct request_queue *q, struct request *rq)
+-{
+-	struct noop_data *nd = q->elevator->elevator_data;
+-
+-	if (rq->queuelist.next == &nd->queue)
+-		return NULL;
+-	return list_entry(rq->queuelist.next, struct request, queuelist);
+-}
+-
+-static int noop_init_queue(struct request_queue *q, struct elevator_type *e)
+-{
+-	struct noop_data *nd;
+-	struct elevator_queue *eq;
+-
+-	eq = elevator_alloc(q, e);
+-	if (!eq)
+-		return -ENOMEM;
+-
+-	nd = kmalloc_node(sizeof(*nd), GFP_KERNEL, q->node);
+-	if (!nd) {
+-		kobject_put(&eq->kobj);
+-		return -ENOMEM;
+-	}
+-	eq->elevator_data = nd;
+-
+-	INIT_LIST_HEAD(&nd->queue);
+-
+-	spin_lock_irq(q->queue_lock);
+-	q->elevator = eq;
+-	spin_unlock_irq(q->queue_lock);
+-	return 0;
+-}
+-
+-static void noop_exit_queue(struct elevator_queue *e)
+-{
+-	struct noop_data *nd = e->elevator_data;
+-
+-	BUG_ON(!list_empty(&nd->queue));
+-	kfree(nd);
+-}
+-
+-static struct elevator_type elevator_noop = {
+-	.ops = {
+-		.elevator_merge_req_fn		= noop_merged_requests,
+-		.elevator_dispatch_fn		= noop_dispatch,
+-		.elevator_add_req_fn		= noop_add_request,
+-		.elevator_former_req_fn		= noop_former_request,
+-		.elevator_latter_req_fn		= noop_latter_request,
+-		.elevator_init_fn		= noop_init_queue,
+-		.elevator_exit_fn		= noop_exit_queue,
+-	},
+-	.elevator_name = "noop",
+-	.elevator_owner = THIS_MODULE,
+-};
+-
+-static int __init noop_init(void)
+-{
+-	return elv_register(&elevator_noop);
+-}
+-
+-static void __exit noop_exit(void)
+-{
+-	elv_unregister(&elevator_noop);
+-}
+-
+-module_init(noop_init);
+-module_exit(noop_exit);
+-
+-
+-MODULE_AUTHOR("Jens Axboe");
+-MODULE_LICENSE("GPL");
+-MODULE_DESCRIPTION("No-op IO scheduler");
